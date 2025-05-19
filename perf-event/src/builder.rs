@@ -77,6 +77,7 @@ pub struct Builder<'a> {
     who: EventPid<'a>,
     cpu: Option<usize>,
     group: Option<&'a mut Group>,
+    cloexec: bool,
 }
 
 impl<'a> Default for Builder<'a> {
@@ -105,6 +106,7 @@ impl<'a> Default for Builder<'a> {
             who: EventPid::ThisProcess,
             cpu: None,
             group: None,
+            cloexec: true,
         }
     }
 }
@@ -156,7 +158,9 @@ impl<'a> Builder<'a> {
     /// `Builder`.
     ///
     /// A freshly built `Counter` is disabled. To begin counting events, you
-    /// must call [`enable`] on the `Counter` or the `Group` to which it belongs.
+    /// must call [`enable`] on the `Counter` or the `Group` to which it belongs,
+    /// unless you use [`enable_on_exec`], in which case this counter will
+    /// automatically enable once its target execs.
     ///
     /// If the `Builder` requests features that the running kernel does not
     /// support, it returns `Err(e)` where `e.kind() == ErrorKind::Other` and
@@ -173,7 +177,7 @@ impl<'a> Builder<'a> {
             Some(cpu) => cpu as c_int,
             None => -1,
         };
-        let (pid, flags) = self.who.as_args();
+        let (pid, mut flags) = self.who.as_args();
         let group_fd = match self.group {
             Some(ref mut g) => {
                 g.max_members += 1;
@@ -181,6 +185,10 @@ impl<'a> Builder<'a> {
             }
             None => -1,
         };
+
+        if self.cloexec {
+            flags |= perf_event_open_sys::bindings::PERF_FLAG_FD_CLOEXEC;
+        }
 
         let file = unsafe {
             File::from_raw_fd(check_errno_syscall(|| {
@@ -502,6 +510,12 @@ impl<'a> Builder<'a> {
     pub fn enable_on_exec(&mut self, enable_on_exec: bool) -> &mut Self {
         self.attrs.set_enable_on_exec(enable_on_exec.into());
         self
+    }
+
+    /// By default, perf event FDs are open with PERF_FLAG_FD_CLOEXEC, so the FD you get back has
+    /// CLOEXEC set. Call this to not do so.
+    pub fn unset_cloexec(mut self) {
+        self.cloexec = false;
     }
 
     /// If set, then the kernel will generate fork and exit records.
